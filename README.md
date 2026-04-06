@@ -157,6 +157,8 @@ sudo ./engine supervisor rootfs
 
 The supervisor process starts and binds to the UNIX domain socket at `/tmp/mini_runtime.sock`. This is the central daemon that all CLI commands communicate with. It stays alive for the entire session, accepting commands, launching containers, and tracking their state. The "ready" message confirms the control socket was created successfully and the supervisor is listening for incoming connections from CLI clients.
 
+![Supervisor Running](screenshots/supervisor_running.jpg)
+
 ---
 
 ### Screenshot 2 — Container Execution and Logging (`engine run` + `engine logs`)
@@ -171,6 +173,8 @@ This shows the full container lifecycle. The `run` command launches container `t
 
 This confirms the logging pipeline works end to end. The container's stdout was piped into the supervisor, passed through the bounded-buffer producer-consumer system, written to a log file, and retrieved correctly on demand. It also shows that the container ran in a properly isolated namespace where the command found and executed its binary.
 
+![Hello World Execution and Logs](screenshots/hello_world_ss2.jpg)
+
 ---
 
 ### Screenshot 3 — Kernel Module Interaction (`dmesg`)
@@ -183,6 +187,8 @@ sudo dmesg | tail
 Every time a container starts, the supervisor opens `/dev/container_monitor` and calls `ioctl(MONITOR_REGISTER)` with the container's PID and memory limits. When the container exits, it calls `ioctl(MONITOR_UNREGISTER)`. The kernel module logs both events via `printk`.
 
 The dmesg output shows repeated register/unregister pairs for containers `t1` (PIDs 5176, 5198, 5212, 5230) and then `t2` (PID 5239). Each pair represents one complete container run — registered at launch, unregistered on exit. This confirms that the user-space supervisor and the kernel module are communicating correctly through the `ioctl` interface, which is the kernel-userspace IPC path for memory monitoring.
+
+![Kernel Module dmesg](screenshots/kernal_interaction_ss_3.jpg)
 
 ---
 
@@ -199,6 +205,8 @@ This demonstrates the IPC control channel. When `engine start` is invoked, it ru
 The supervisor receives the request, calls `clone()` with `CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS` to create an isolated container process, chroots it into the specified rootfs, registers the PID with the kernel module, and sends back the confirmation message. The terminal shows `container 'alpha' started` and `container 'beta' started` — these are the supervisor's responses arriving back through the socket.
 
 Two containers are now running concurrently in the background, each isolated in their own namespace with their own rootfs copy.
+
+![CLI IPC Start](screenshots/screenshot_4.jpg)
 
 ---
 
@@ -221,6 +229,10 @@ The dmesg output shows:
 The kernel timer fired, `get_rss_bytes()` returned 17,379,328 bytes (~16.5 MiB) for PID 8158, which exceeds the soft limit of 10,485,760 bytes (10 MiB). The module printed the warning and set an internal `soft_warned` flag so the same container does not generate repeated warnings. The container keeps running — soft limits are advisory, not enforced.
 
 This shows the kernel module correctly performing periodic RSS polling and threshold detection entirely in kernel space, without any involvement from the user-space supervisor.
+
+![Soft Limit Warning - Command](screenshots/5_2.jpg)
+
+![Soft Limit Warning - dmesg](screenshots/5_1.jpg)
 
 ---
 
@@ -252,6 +264,10 @@ memtest  6395   killed   2026-04-06T18:24:28
 
 The `killed` state (as opposed to `exited`) specifically means the process was terminated by a signal it did not initiate itself. This distinction in the metadata is important — it tells you whether the container exited cleanly or was forcefully stopped.
 
+![Hard Limit dmesg](screenshots/screenshot_6_1.jpg)
+
+![Hard Limit engine ps](screenshots/screenshot_6_2.jpg)
+
 ---
 
 ### Screenshot 7 — Scheduling Experiment (nice values)
@@ -275,6 +291,8 @@ Linux's CFS (Completely Fair Scheduler) assigns weights based on nice values. A 
 
 The gap in the `hi` log (jumps from elapsed=7 to elapsed=23) is interesting — it shows a period where the log was not being read but the container kept running. It is a logging snapshot, not a measure of pauses in execution. The `lo` container getting only `elapsed=1` before completion shows it was severely time-limited by the scheduler.
 
+![Scheduling Experiment](screenshots/screenshot_7.jpg)
+
 ---
 
 ### Screenshot 8 — Clean Teardown
@@ -295,6 +313,8 @@ After pressing Ctrl+C on the supervisor (which triggered `[supervisor] shutting 
 `dmesg | grep container_monitor | tail -5` — shows the `hi` and `lo` containers being registered and unregistered in order, followed by `Module unloaded.` as the final line. Nothing was left tracked in the kernel's list.
 
 The teardown sequence confirms that all resources — file descriptors, process entries, kernel memory, the UNIX socket, and the character device — were released properly.
+
+![Clean Teardown](screenshots/screenshot_8.jpg)
 
 ---
 
