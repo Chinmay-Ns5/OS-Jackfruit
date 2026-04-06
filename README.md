@@ -68,11 +68,7 @@ cd ~/OS-Project/OS-Jackfruit/boilerplate
 make all
 ```
 
-This compiles `engine` (the user-space runtime), `monitor.ko` (the kernel module), and the workload binaries.
-
 ### Step 2 — Recompile workload binaries as static
-
-The workload binaries need to be statically linked so they run inside a minimal rootfs without needing shared libraries from the host.
 
 ```bash
 gcc -static -o memory_hog memory_hog.c
@@ -80,15 +76,13 @@ gcc -static -o cpu_hog    cpu_hog.c
 gcc -static -o io_pulse   io_pulse.c
 ```
 
-Verify they are statically linked (output must say `statically linked`):
+Verify they are statically linked:
 
 ```bash
 file memory_hog cpu_hog io_pulse
 ```
 
 ### Step 3 — Create per-container rootfs copies
-
-Two separate rootfs copies are needed so that two containers can run simultaneously without sharing the same filesystem and causing conflicts.
 
 ```bash
 cp -a rootfs rootfs-alpha
@@ -104,8 +98,6 @@ cp memory_hog cpu_hog io_pulse rootfs-beta/bin/
 
 ### Step 5 — Ensure `/proc` directories exist
 
-The container mounts `/proc` inside the chroot so that process-related tools work correctly inside the container. The directory must exist beforehand.
-
 ```bash
 mkdir -p rootfs-alpha/proc
 mkdir -p rootfs-beta/proc
@@ -113,30 +105,19 @@ mkdir -p rootfs-beta/proc
 
 ### Step 6 — Test that binaries work inside the rootfs
 
-Before running any container, verify manually that a binary executes inside the chroot:
-
 ```bash
 sudo chroot rootfs-alpha /bin/memory_hog
 ```
-
-You should see output like `allocation=1 chunk=8MB total=8MB`. Press Ctrl+C to stop. If this works, containers will work correctly too.
 
 ### Step 7 — Load the kernel module
 
 ```bash
 sudo insmod monitor.ko
-```
-
-Verify it loaded and the device exists:
-
-```bash
 lsmod | grep monitor
 ls /dev/container_monitor
 ```
 
 ### Step 8 — Start the supervisor
-
-The supervisor is a long-running daemon that accepts CLI commands over the UNIX socket. Run this in a dedicated terminal and leave it open for the entire session.
 
 ```bash
 sudo ./engine supervisor rootfs
@@ -155,9 +136,9 @@ Expected output: `[supervisor] ready on /tmp/mini_runtime.sock`
 sudo ./engine supervisor rootfs
 ```
 
-The supervisor process starts and binds to the UNIX domain socket at `/tmp/mini_runtime.sock`. This is the central daemon that all CLI commands communicate with. It stays alive for the entire session, accepting commands, launching containers, and tracking their state. The "ready" message confirms the control socket was created successfully and the supervisor is listening for incoming connections from CLI clients.
+The supervisor process starts and binds to the UNIX domain socket at `/tmp/mini_runtime.sock`. This is the central daemon that all CLI commands communicate with. It stays alive for the entire session, accepting commands, launching containers, and tracking their state.
 
-![Supervisor Running](screenshots/supervisor_running.jpg)
+![Supervisor Running](supervisor%20running.jpg)
 
 ---
 
@@ -169,11 +150,9 @@ sudo ./engine run t2 rootfs "/bin/echo HELLO_WORLD"
 sudo ./engine logs t2
 ```
 
-This shows the full container lifecycle. The `run` command launches container `t2`, executes `/bin/echo HELLO_WORLD` inside the isolated chroot environment, waits for it to finish, and returns. The `logs` command retrieves the captured output — `HELLO_WORLD` — from the per-container log file.
+This shows the full container lifecycle. The `run` command launches container `t2`, executes `/bin/echo HELLO_WORLD` inside the isolated chroot environment, waits for it to finish, and returns. The `logs` command retrieves the captured output from the per-container log file, confirming the logging pipeline works end to end.
 
-This confirms the logging pipeline works end to end. The container's stdout was piped into the supervisor, passed through the bounded-buffer producer-consumer system, written to a log file, and retrieved correctly on demand. It also shows that the container ran in a properly isolated namespace where the command found and executed its binary.
-
-![Hello World Execution and Logs](screenshots/hello_world_ss2.jpg)
+![Hello World Execution and Logs](hello%20world%20ss2.jpg)
 
 ---
 
@@ -184,11 +163,9 @@ This confirms the logging pipeline works end to end. The container's stdout was 
 sudo dmesg | tail
 ```
 
-Every time a container starts, the supervisor opens `/dev/container_monitor` and calls `ioctl(MONITOR_REGISTER)` with the container's PID and memory limits. When the container exits, it calls `ioctl(MONITOR_UNREGISTER)`. The kernel module logs both events via `printk`.
+The dmesg output shows repeated register/unregister pairs for containers `t1` and `t2`. Each pair represents one complete container run — registered at launch, unregistered on exit. This confirms that the user-space supervisor and the kernel module are communicating correctly through the `ioctl` interface.
 
-The dmesg output shows repeated register/unregister pairs for containers `t1` (PIDs 5176, 5198, 5212, 5230) and then `t2` (PID 5239). Each pair represents one complete container run — registered at launch, unregistered on exit. This confirms that the user-space supervisor and the kernel module are communicating correctly through the `ioctl` interface, which is the kernel-userspace IPC path for memory monitoring.
-
-![Kernel Module dmesg](screenshots/kernal_interaction_ss_3.jpg)
+![Kernel Module dmesg](kernal%20interaction%20ss%203.jpg)
 
 ---
 
@@ -200,13 +177,9 @@ sudo ./engine start alpha rootfs-alpha /bin/cpu_hog --soft-mib 40 --hard-mib 64
 sudo ./engine start beta  rootfs-beta  /bin/cpu_hog --soft-mib 40 --hard-mib 64 --nice 10
 ```
 
-This demonstrates the IPC control channel. When `engine start` is invoked, it runs as a short-lived client process. It connects to `/tmp/mini_runtime.sock`, serialises the start request, and sends it over the UNIX domain socket to the supervisor.
+This demonstrates the IPC control channel. When `engine start` is invoked it connects to `/tmp/mini_runtime.sock`, sends the request to the supervisor, which calls `clone()` with `CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS`, chroots into the specified rootfs, and sends back confirmation. Two containers now run concurrently, each isolated in their own namespace.
 
-The supervisor receives the request, calls `clone()` with `CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS` to create an isolated container process, chroots it into the specified rootfs, registers the PID with the kernel module, and sends back the confirmation message. The terminal shows `container 'alpha' started` and `container 'beta' started` — these are the supervisor's responses arriving back through the socket.
-
-Two containers are now running concurrently in the background, each isolated in their own namespace with their own rootfs copy.
-
-![CLI IPC Start](screenshots/screenshot_4.jpg)
+![CLI IPC Start](screenshot%204.jpg)
 
 ---
 
@@ -218,21 +191,11 @@ sudo ./engine start memtest rootfs-alpha /bin/memory_hog --soft-mib 10 --hard-mi
 watch -n1 "sudo dmesg | grep container_monitor"
 ```
 
-The `memory_hog` program allocates memory in 8 MB chunks, one per second. With a soft limit of 10 MiB, it crosses the threshold within the first two seconds of running.
+The `memory_hog` program allocates memory in 8 MB chunks per second. With a soft limit of 10 MiB it crosses the threshold within the first two seconds. The kernel timer fires, detects the RSS violation, logs a `SOFT LIMIT` warning, and sets an internal flag so the warning only fires once. The container keeps running — soft limits are advisory only.
 
-The dmesg output shows:
-```
-[container_monitor] Registering container=memtest pid=8158 soft=10485760 hard=524288000
-[container_monitor] SOFT LIMIT container=memtest pid=8158 rss=17379328 limit=10485760
-```
+![Soft Limit Warning - Command](5.2.jpg)
 
-The kernel timer fired, `get_rss_bytes()` returned 17,379,328 bytes (~16.5 MiB) for PID 8158, which exceeds the soft limit of 10,485,760 bytes (10 MiB). The module printed the warning and set an internal `soft_warned` flag so the same container does not generate repeated warnings. The container keeps running — soft limits are advisory, not enforced.
-
-This shows the kernel module correctly performing periodic RSS polling and threshold detection entirely in kernel space, without any involvement from the user-space supervisor.
-
-![Soft Limit Warning - Command](screenshots/5_2.jpg)
-
-![Soft Limit Warning - dmesg](screenshots/5_1.jpg)
+![Soft Limit Warning - dmesg](5.1.jpg)
 
 ---
 
@@ -245,28 +208,11 @@ watch -n1 "sudo dmesg | grep container_monitor | tail -20"
 sudo ./engine ps
 ```
 
-The dmesg output (first part) shows the complete sequence for container `memtest` with PID 6395:
+When RSS exceeded the 50 MiB hard limit, the kernel module called `send_sig(SIGKILL, task, 1)`. The supervisor's `SIGCHLD` handler detected the death via `WIFSIGNALED` and marked the container state as `killed` — distinguishing a forced termination from a clean exit.
 
-```
-Registering container=memtest pid=6395 soft=10485760 hard=52428800
-SOFT LIMIT container=memtest pid=6395 rss=17379328 limit=10485760
-HARD LIMIT container=memtest pid=6395 rss=59322368 limit=52428800
-Unregister request container=memtest pid=6395
-```
+![Hard Limit dmesg](screenshot%206.1.jpg)
 
-When RSS reached 59 MB — exceeding the 50 MiB hard limit — the kernel module called `send_sig(SIGKILL, task, 1)`. The container was terminated immediately. The supervisor's `SIGCHLD` handler fired, called `waitpid()` to reap the child, detected via `WIFSIGNALED` that it was killed by a signal, and updated the container's state.
-
-`engine ps` (second part) confirms the result:
-```
-ID       PID    STATE    STARTED
-memtest  6395   killed   2026-04-06T18:24:28
-```
-
-The `killed` state (as opposed to `exited`) specifically means the process was terminated by a signal it did not initiate itself. This distinction in the metadata is important — it tells you whether the container exited cleanly or was forcefully stopped.
-
-![Hard Limit dmesg](screenshots/screenshot_6_1.jpg)
-
-![Hard Limit engine ps](screenshots/screenshot_6_2.jpg)
+![Hard Limit engine ps](screenshot%206.2.jpg)
 
 ---
 
@@ -280,18 +226,9 @@ sudo ./engine logs hi
 sudo ./engine logs lo
 ```
 
-Both containers run the exact same `cpu_hog` binary — a tight CPU loop that prints its progress once per second. The only difference between them is priority: `hi` runs at nice -5 and `lo` runs at nice 15.
+Both containers run the same `cpu_hog` binary. `hi` (nice -5) logs elapsed=1 through elapsed=7 and beyond, while `lo` (nice 15) barely reaches elapsed=1 before the log is read. Linux CFS assigns higher scheduling weight to lower nice values, so `hi` gets CPU far more frequently and makes faster progress.
 
-The logs tell the story clearly:
-
-- `hi` (nice -5): shows `elapsed=1` through `elapsed=7`, then jumps to `elapsed=23`, and completes with `done duration=10`.
-- `lo` (nice 15): shows only `elapsed=1` and then `done duration=10` immediately — it barely made it to the first checkpoint before the log was read.
-
-Linux's CFS (Completely Fair Scheduler) assigns weights based on nice values. A nice of -5 gives roughly 3× the scheduling weight of nice 0, while nice 15 gives significantly less. The scheduler tracks a virtual runtime per process and always picks the runnable task with the lowest virtual runtime. Since `hi`'s virtual runtime advances more slowly relative to real time (because of its higher weight), it gets selected more frequently and makes faster progress.
-
-The gap in the `hi` log (jumps from elapsed=7 to elapsed=23) is interesting — it shows a period where the log was not being read but the container kept running. It is a logging snapshot, not a measure of pauses in execution. The `lo` container getting only `elapsed=1` before completion shows it was severely time-limited by the scheduler.
-
-![Scheduling Experiment](screenshots/screenshot_7.jpg)
+![Scheduling Experiment](screenshot%207.jpg)
 
 ---
 
@@ -304,17 +241,9 @@ sudo rmmod monitor
 sudo dmesg | grep container_monitor | tail -5
 ```
 
-After pressing Ctrl+C on the supervisor (which triggered `[supervisor] shutting down...`), we verified clean resource cleanup across both user space and kernel space.
+After Ctrl+C on the supervisor, `ps aux | grep defunct` shows no zombie processes — the `SIGCHLD` handler correctly reaped all children. `rmmod monitor` unloads cleanly with no kernel memory leaks. The final dmesg line reads `Module unloaded.` confirming full cleanup of all resources.
 
-`ps aux | grep defunct` — only the grep process itself appears in the output. No actual container processes are left as zombies. This confirms the supervisor's `SIGCHLD` handler correctly called `waitpid()` for all children before the supervisor exited, preventing any zombie accumulation.
-
-`sudo rmmod monitor` — the kernel module unloads cleanly with no errors, which means no memory was leaked in kernel space (all list nodes were freed in `monitor_exit()`).
-
-`dmesg | grep container_monitor | tail -5` — shows the `hi` and `lo` containers being registered and unregistered in order, followed by `Module unloaded.` as the final line. Nothing was left tracked in the kernel's list.
-
-The teardown sequence confirms that all resources — file descriptors, process entries, kernel memory, the UNIX socket, and the character device — were released properly.
-
-![Clean Teardown](screenshots/screenshot_8.jpg)
+![Clean Teardown](screenshot%208.jpg)
 
 ---
 
@@ -324,4 +253,4 @@ This project gave us a practical, ground-level understanding of how containerisa
 
 The core OS concepts we worked with directly: `clone()` and namespace isolation, `chroot` and filesystem virtualisation, producer-consumer synchronisation with mutex and condition variables, kernel-userspace communication via `ioctl`, `SIGCHLD` handling and zombie prevention, RSS-based memory monitoring from kernel space, and CPU scheduling weight through nice values.
 
-Building it from scratch made it clear how much of what Docker and similar tools do is simply these Linux primitives composed carefully. The project was a good exercise in systems programming where the abstractions are thin and the consequences of getting things wrong show up immediately.
+Building it from scratch made it clear how much of what Docker and similar tools do is simply these Linux primitives composed carefully.
